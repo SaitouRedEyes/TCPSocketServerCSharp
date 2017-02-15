@@ -1,15 +1,11 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Drawing;
-using System.Linq;
 using System.Text;
 using System.Windows.Forms;
 using System.Threading;
 using System.Net.Sockets;
 using System.Net;
 using System.IO;
+using System.Globalization;
 
 namespace ServerSample
 {
@@ -18,10 +14,7 @@ namespace ServerSample
         delegate void SetTextCallback(string text);
 
         private Thread thread;
-        private Socket connection;
-        private NetworkStream socketStream;
-        private BinaryWriter write;
-        private BinaryReader read;
+        private Socket socket;
         private TcpListener listening;
         private int connectionsNumber;
 
@@ -46,49 +39,83 @@ namespace ServerSample
         {
             try
             {
-                while (true)
+                while(true)
                 {
-                    this.SetText("Aguardando conexões...");
-                    connection = listening.AcceptSocket();
+                    this.SetText("Waiting connections...");
+                    socket = listening.AcceptSocket();
+                    this.SetText("Connection accepted from " + socket.RemoteEndPoint);
 
-                    connectionsNumber++;
-
-                    socketStream = new NetworkStream(connection);
-
-                    write = new BinaryWriter(socketStream);
-                    read = new BinaryReader(socketStream);
-
-                    this.SetText(connectionsNumber + " Conexões Recebidas!");
-                    write.Write("Conexão Efetuada!");
-
-                    send.ReadOnly = false;
-
-                    string resp = "";
+                    byte[] b = new byte[100];
+                    int k = socket.Receive(b);
 
                     do
                     {
-                        try
-                        {
-                            resp = read.ReadString();
-                            this.SetText(resp);
-                        }
-                        catch (Exception)
-                        {
-                            break;
-                        }
-                    } while (connection.Connected);
+                        string[] request = ReadToString(k, b);
+                        this.SetText("Web server ID = " + request[0]);
 
-                    this.SetText("Conexão Finalizada! \r\n");
+                        SendAnswer(request, socket);
 
-                    CloseConnection();
+                        this.SetText("Closing Connection:");
+                        Console.WriteLine("Closing Connection:");
+
+                        CloseConnection();
+                    }
+                    while (socket.Connected);
+
+                    this.SetText("Connection End");
+                    Console.WriteLine("Connection End");
                 }
+                
             }
-            catch (Exception error)
+            catch (Exception e)
             {
-                MessageBox.Show(error.ToString());
+                Console.WriteLine("Error..... " + e.StackTrace);
             }
         }
 
+        //Read the client data and convert it to an object that is easier to manipulate.
+        private String[] ReadToString(int msg, byte[] b)
+        {
+            char cc = ' ';
+            string text = null;
+            
+            for (int i = 0; i < msg - 1; i++)
+            {
+                cc = Convert.ToChar(b[i]);
+                text += cc.ToString();
+            }
+
+            string[] textSplited = text.Split('&');
+
+            return textSplited;
+        }
+
+        //Send to client the answer of a service.
+        private void SendAnswer(string[] request, Socket s)
+        {
+            ASCIIEncoding asen = new ASCIIEncoding();
+            
+            switch ((int)float.Parse(request[0], CultureInfo.InvariantCulture.NumberFormat))
+            {
+                case 1: s.Send(asen.GetBytes(Sum(request[1], request[2]))); break;
+
+                default: s.Send(asen.GetBytes("Web Service Not Found")); break;
+            }
+
+            this.SetText("Send Answer to: " + s.RemoteEndPoint);
+            Console.WriteLine("Send Answer to: " + s.RemoteEndPoint);
+        }
+
+        //Sum of the 2 values.
+        private string Sum(string request1, string request2)
+        {
+            float n1 = float.Parse(request1, CultureInfo.InvariantCulture.NumberFormat);
+            float n2 = float.Parse(request2, CultureInfo.InvariantCulture.NumberFormat);
+
+            return (n1 + n2).ToString();
+        }
+
+        //Set text on the windows form service interface.
         private void SetText(string text)
         {
             // InvokeRequired required compares the thread ID of the
@@ -107,25 +134,34 @@ namespace ServerSample
             }
         }
 
+        //if the windows form service interface close, close the connection with the client.
         private void Server_FormClosed(object sender, FormClosedEventArgs e)
         {
-            if (connection != null)
+            if (socket != null)
             {
+                connectionsNumber--;
                 CloseConnection();
             }
 
             System.Environment.Exit(System.Environment.ExitCode);
         }
 
+        //Write "FIM" on the send TextField to close connection with the client.
         private void send_KeyDown(object sender, KeyEventArgs e)
         {
             try
             {
-                if (e.KeyCode == Keys.Enter && connection != null)
+                if (e.KeyCode == Keys.Enter && socket != null)
                 {
-                    write.Write(send.Text);
+                    ASCIIEncoding asen = new ASCIIEncoding();
 
-                    if (send.Text.Equals("FIM")) CloseConnection();
+                    socket.Send(asen.GetBytes(send.Text));
+
+                    if (send.Text.Equals("FIM"))
+                    {
+                        connectionsNumber--;
+                        CloseConnection();
+                    }
 
                     send.Clear();
                 }
@@ -138,10 +174,7 @@ namespace ServerSample
 
         private void CloseConnection()
         {
-            write.Close();
-            read.Close();
-            socketStream.Close();
-            connection.Close();
+            socket.Close();
         }
     }
 }
